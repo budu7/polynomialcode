@@ -1,6 +1,7 @@
 import argparse
 import numpy as np
 from mpi4py import MPI
+from scipy.interpolate import lagrange
 
 MAX = 10
 
@@ -8,10 +9,14 @@ def main(args):
     """Main logic."""
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
+    status = MPI.Status()
 
     if rank == 0:
         A = np.random.randint(MAX, size=(args.s, args.r))
         B = np.random.randint(MAX, size=(args.s, args.t))
+        print(f"Matrix A: \n{A}")
+        print(f"Matrix B: \n{B}")
+        print(f"Desired result C: \n{A.T @ B}")
     else:
         A = np.empty(shape=(args.s, args.r), dtype='int')
         B = np.empty(shape=(args.s, args.t), dtype='int')
@@ -56,14 +61,32 @@ def main(args):
 
         n_completed = 0
         needed_C_i = [np.empty(shape=(A_subcols, B_subcols), dtype='int') for i in range(n_needed)]
+        needed_x_i = np.empty(n_needed, dtype='int')
         while n_completed < n_needed:
             # TODO: this is blocking; figure out a non-blocking implementation with Irecv
-            comm.Recv(needed_C_i[n_completed], source=MPI.ANY_SOURCE)
+            comm.Recv(needed_C_i[n_completed], source=MPI.ANY_SOURCE, status=status)
+            needed_x_i[n_completed] = status.Get_source()
             n_completed += 1
 
         print(f"Master has received all necessary matrices \n{needed_C_i}.")
+        print(f"which were received from the workers with the following ranks, respectively \n{needed_x_i}")
 
         # TODO: write the polynomial interpolation
+
+        C = np.empty(shape=(args.r, args.t), dtype='int')
+
+        # C_{k,k1} is the coefficient of the (p-1+k*p+k1*p*m)-th degree term
+        # do r/m * t/n interpolations (these are dimensions of the C_i)
+        for a in range(A_subcols):
+            for b in range(B_subcols):
+                curr_vals = [needed_C_i[i][a][b] for i in range(n_needed)]
+                # TODO: fast implementation of polynomial interpolation with x values of needed_x_i and y values of curr_vals
+                # Gathen Gerhard describes an O(klog^2kloglogk) algorithm
+                curr_polynomial = np.rint(lagrange(needed_x_i, curr_vals).c)
+                for k in range(args.m):
+                    for k1 in range(args.n):
+                        C[k*A_subcols+a][k1*B_subcols+b] = curr_polynomial[n_needed-1-(args.p-1+k*args.p+k1*args.p*args.m)]
+        print(f"Decoded C:\n{C}")
 
 
 def get_args():
