@@ -1,18 +1,31 @@
 import argparse
+import time
 import numpy as np
 from mpi4py import MPI
 from scipy.interpolate import lagrange
 
 import encoder_decoder as ed
 
-MAX = 10
+# ---------GLOBALS----------
+MAX        = 10
+SLEEP_TIME = 1  # in seconds
+# --------------------------
 
 def main(args):
     """Main logic."""
+    # -----CHANGE GLOBALS HERE-----
+    if args.max is not None:
+        MAX = args.max
+    # -----------------------------
+
     comm = MPI.COMM_WORLD
     n_workers = comm.Get_size()
     rank = comm.Get_rank()
     status = MPI.Status()
+    stragglers = None if args.stragglers == None else \
+                 set(np.random.default_rng().choice(np.arange(start=1, stop=n_workers),
+                                                    size=args.stragglers,
+                                                    replace=False))
 
     all_A_i, all_B_i = None, None
 
@@ -40,6 +53,9 @@ def main(args):
 
     if rank != 0:
         C_i = A_i.T @ B_i
+        # straggler functionality
+        if rank in stragglers:
+            time.sleep(SLEEP_TIME)
         # non-blocking send; returns a Request
         req = comm.Isend(C_i, dest=0)
         req.Wait()
@@ -93,6 +109,9 @@ def get_args():
                         type=int)
     parser.add_argument("--max",
                         help="Maximal value of element of A, B",
+                        type=int)
+    parser.add_argument("--stragglers",
+                        help="Randomly add k artificial stragglers.",
                         type=int)
     #-----STOP HERE----------#
     return parser.parse_args()
