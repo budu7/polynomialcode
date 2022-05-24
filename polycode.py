@@ -3,55 +3,44 @@ import numpy as np
 from mpi4py import MPI
 from scipy.interpolate import lagrange
 
+import encoder_decoder as ed
+
 MAX = 10
 
 def main(args):
     """Main logic."""
     comm = MPI.COMM_WORLD
+    n_workers = comm.Get_size()
     rank = comm.Get_rank()
     status = MPI.Status()
+
+    all_A_i, all_B_i = None, None
 
     if rank == 0:
         A = np.random.randint(MAX, size=(args.s, args.r))
         B = np.random.randint(MAX, size=(args.s, args.t))
+
         print(f"Matrix A: \n{A}")
         print(f"Matrix B: \n{B}")
         print(f"Desired result C: \n{A.T @ B}")
-    else:
-        A = np.empty(shape=(args.s, args.r), dtype='int')
-        B = np.empty(shape=(args.s, args.t), dtype='int')
-    
-    comm.Bcast([A, MPI.INT], root=0)
-    comm.Bcast([B, MPI.INT], root=0)
+
+        all_A_i, all_B_i = ed.poly_encode(A, B, 
+                                          n_workers,
+                                          args.r, args.s, args.t, args.p, args.m, args.n)
 
     # TODO: A_subrows and B_subrows are redundant but this is more readable
     A_subrows, A_subcols = int(np.rint(args.s/args.p)), int(np.rint(args.r/args.m))
     B_subrows, B_subcols = int(np.rint(args.s/args.p)), int(np.rint(args.t/args.n))
 
+    A_i = np.empty(shape=(A_subrows, A_subcols), dtype='int')
+    B_i = np.empty(shape=(B_subrows, B_subcols), dtype='int')
+
+    comm.Scatter(all_A_i, A_i, root=0)
+    comm.Scatter(all_B_i, B_i, root=0)
+
     if rank != 0:
-        A_i = np.zeros(shape=(A_subrows, A_subcols), dtype='int')
-        B_i = np.zeros(shape=(A_subrows, B_subcols), dtype='int')
-
-        # each worker stores
-        #   \tilde{A}_i = \sum_{j=0}^{p-1} \sum_{k=0}^{m-1} A_{j, k}x_i^{j+kp}
-        #   \tilde{B}_i = \sum_{j=0}^{p-1} \sum_{k=0}^{m-1} B_{j, k}x_i^{p-1-j+kpm}
-
-        # TODO: lots of improvements can be made here; for instance:
-        #   1. taking j*subrows:(j+1)*subrows into the outer loop to avoid recomputation
-        #   2. binary exponentiation on x_i rather than recomputing powers over and over
-        for j in range(args.p):
-            # start and end rows of A_{j, k} and B_{j, k}
-            for k in range(args.m):
-                # block A_{j, k}
-                A_i += A[j*A_subrows:(j+1)*A_subrows, 
-                         k*A_subcols:(k+1)*A_subcols] * np.power(rank, j + k*args.p)
-            for k in range(args.n):
-                # block B_{j, k}
-                B_i += B[j*B_subrows:(j+1)*B_subrows,
-                         k*B_subcols:(k+1)*B_subcols] * np.power(rank, args.p-1-j+k*args.p*args.m)
-
-        # non-blocking send; returns a Request
         C_i = A_i.T @ B_i
+        # non-blocking send; returns a Request
         req = comm.Isend(C_i, dest=0)
         req.Wait()
         print(f"Worker {rank} has completed, returning \n{C_i}.")
@@ -71,21 +60,12 @@ def main(args):
         print(f"Master has received all necessary matrices \n{needed_C_i}.")
         print(f"which were received from the workers with the following ranks, respectively \n{needed_x_i}")
 
-        # TODO: write the polynomial interpolation
-
-        C = np.empty(shape=(args.r, args.t), dtype='int')
-
-        # C_{k,k1} is the coefficient of the (p-1+k*p+k1*p*m)-th degree term
-        # do r/m * t/n interpolations (these are dimensions of the C_i)
-        for a in range(A_subcols):
-            for b in range(B_subcols):
-                curr_vals = [needed_C_i[i][a][b] for i in range(n_needed)]
-                # TODO: fast implementation of polynomial interpolation with x values of needed_x_i and y values of curr_vals
-                # Gathen Gerhard describes an O(klog^2kloglogk) algorithm
-                curr_polynomial = np.rint(lagrange(needed_x_i, curr_vals).c)
-                for k in range(args.m):
-                    for k1 in range(args.n):
-                        C[k*A_subcols+a][k1*B_subcols+b] = curr_polynomial[n_needed-1-(args.p-1+k*args.p+k1*args.p*args.m)]
+        C = ed.poly_decode(needed_C_i,
+                           needed_x_i,
+                           A_subcols,
+                           B_subcols,
+                           args.r, args.t, args.p, args.m, args.n)
+        
         print(f"Decoded C:\n{C}")
 
 
