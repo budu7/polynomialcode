@@ -54,7 +54,7 @@ def main(args):
     if rank != 0:
         C_i = A_i.T @ B_i
         # straggler functionality
-        if rank in stragglers:
+        if stragglers is not None and rank in stragglers:
             time.sleep(SLEEP_TIME)
         # non-blocking send; returns a Request
         req = comm.Isend(C_i, dest=0)
