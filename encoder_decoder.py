@@ -1,6 +1,9 @@
 import numpy as np
 from scipy.interpolate import lagrange
 
+from utils import time_section
+
+@time_section
 def poly_encode(A, B, n_workers, r, s, t, p, m, n):
     """Master node encodes A into A_i, B_i for each worker i, 
        as in the polynomial coding paper."""
@@ -36,6 +39,7 @@ def poly_encode(A, B, n_workers, r, s, t, p, m, n):
     return all_A_i, all_B_i
 
 
+@time_section
 def poly_decode(needed_C_i, needed_x_i, A_subcols, B_subcols, r, t, p, m, n):
     n_needed = len(needed_C_i)
     A_subcols, B_subcols = int(np.rint(r/m)), int(np.rint(t/n))
@@ -53,7 +57,7 @@ def poly_decode(needed_C_i, needed_x_i, A_subcols, B_subcols, r, t, p, m, n):
             curr_polynomial = np.rint(lagrange(needed_x_i, curr_vals).c)
             for k in range(m):
                 for k1 in range(n):
-                    C[k*A_subcols*a][k1*B_subcols+b] \
+                    C[k*A_subcols+a][k1*B_subcols+b] \
                         = curr_polynomial[n_needed - 1 - (p-1 + k*p + k1*p*m)]
     
     return C
